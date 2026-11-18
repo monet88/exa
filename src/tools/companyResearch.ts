@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
+import { API_CONFIG, integrationHeaders, withExaClient, type ExaClientConfig } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError } from "../utils/errorHandler.js";
@@ -9,10 +9,7 @@ import { logSearchWarnings, withSearchNotices } from "./searchNotes.js";
 import { lenientOptionalNumber } from "./validation.js";
 import { checkpoint } from "agnost";
 
-export function registerCompanyResearchTool(
-  server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
-): void {
+export function registerCompanyResearchTool(server: McpServer, config?: ExaClientConfig): void {
   server.tool(
     "company_research_exa",
     `[Deprecated: Use web_search_advanced_exa instead] Research any company to get business information, news, and insights.
@@ -36,8 +33,6 @@ Returns: Company information from trusted business sources.`,
       logger.start(companyName);
 
       try {
-        const exa = createExaClient(config);
-
         const searchRequest: ExaSearchRequest = {
           query: `${companyName} company`,
           type: "auto",
@@ -51,13 +46,15 @@ Returns: Company information from trusted business sources.`,
         checkpoint("company_research_request_prepared");
         logger.log("Sending request to Exa API for company research");
 
-        const response = await retryWithBackoff(() =>
-          exa.request<ExaSearchResponse>(
-            API_CONFIG.ENDPOINTS.SEARCH,
-            "POST",
-            searchRequest,
-            undefined,
-            integrationHeaders("company-research-mcp", config),
+        const response = await withExaClient(config, undefined, (exa) =>
+          retryWithBackoff(() =>
+            exa.request<ExaSearchResponse>(
+              API_CONFIG.ENDPOINTS.SEARCH,
+              "POST",
+              searchRequest,
+              undefined,
+              integrationHeaders("company-research-mcp", config),
+            ),
           ),
         );
 

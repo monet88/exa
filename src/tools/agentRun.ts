@@ -15,7 +15,8 @@ import {
   heartbeatMessage,
   type AgentProgressState,
 } from "./agentProgress.js";
-import { createExaClient } from "./config.js";
+import { createExaClient, runWithPoolLease } from "./config.js";
+import type { KeyPool } from "../utils/keyPool.js";
 
 const effortSchema = z.enum(["minimal", "low", "medium", "high", "xhigh", "ultra", "auto"]);
 const recordSchema = () => z.record(z.unknown());
@@ -332,6 +333,7 @@ export async function streamAgentRun(params: {
   client: AgentRunClient;
   runInput: AgentRunInput;
   onProgress?: (progress: number, message: string) => void | Promise<void>;
+  onRunId?: (runId: string) => void;
   signal?: AbortSignal;
   callWindowMs?: number;
   heartbeatMs?: number;
@@ -422,7 +424,10 @@ export async function streamAgentRun(params: {
             ? (event.data as Record<string, unknown>)
             : undefined;
         const eventRunId = eventData?.id;
-        if (typeof eventRunId === "string") runId = eventRunId;
+        if (typeof eventRunId === "string") {
+          runId = eventRunId;
+          params.onRunId?.(eventRunId);
+        }
       }
 
       await progressBridge.handle(event);
@@ -640,6 +645,7 @@ type StreamToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
 export type AgentRunConfig = {
   exaApiKey?: string;
+  keyPool?: KeyPool;
   oauthAccessToken?: string;
   exaSource?: string;
   mcpSessionId?: string;
@@ -703,7 +709,9 @@ export function registerAgentRunTool(
       logger.start(runId != null ? "resume request" : "streaming request");
 
       try {
-        const hasApiKey = typeof config?.exaApiKey === "string" && config.exaApiKey.length > 0;
+        const hasPoolKeys = Boolean(config?.keyPool?.hasKeys);
+        const hasApiKey =
+          (typeof config?.exaApiKey === "string" && config.exaApiKey.length > 0) || hasPoolKeys;
         const hasOAuthToken =
           typeof config?.oauthAccessToken === "string" && config.oauthAccessToken.length > 0;
         if (!hasApiKey && !hasOAuthToken) {
@@ -727,7 +735,6 @@ export function registerAgentRunTool(
           );
         }
 
-        const client = (options?.clientFactory ?? defaultClientFactory)(config);
         const progressToken = extra?._meta?.progressToken;
         let progressBroken = false;
         const onProgress =
@@ -746,58 +753,72 @@ export function registerAgentRunTool(
                 }
               };
 
-        let outcome: RunOutcome;
-        if (runId != null) {
-          checkpoint("agent_run_resume", { mode: "retained" });
-          outcome = await pollAgentRun({
-            client,
-            runId,
-            onProgress,
-            signal: extra?.signal,
-            callWindowMs: options?.callWindowMs,
-            pollIntervalMs: options?.pollIntervalMs,
-            progressTimeoutMs: options?.progressTimeoutMs,
-          });
-        } else {
-          const runInput: AgentRunInput = {
-            query: query as string,
-            ...(systemPrompt != null ? { systemPrompt } : {}),
-            ...(outputSchema != null ? { outputSchema } : {}),
-            ...(input != null ? { input } : {}),
-            // Under non-strict compilation zod infers `provider` as
-            // optional; normalize so both modes typecheck.
-            ...(dataSources != null
-              ? {
-                  dataSources: dataSources.flatMap(({ provider }) =>
-                    provider != null ? [{ provider }] : [],
-                  ),
+        const pinTarget = runId ?? previousRunId ?? undefined;
+        const outcome = await runWithPoolLease(
+          config,
+          async (lease) => {
+            const resolvedConfig = lease ? { ...config, exaApiKey: lease.key } : config;
+            const client = (options?.clientFactory ?? defaultClientFactory)(resolvedConfig);
+
+            if (runId != null) {
+              checkpoint("agent_run_resume", { mode: "retained" });
+              return pollAgentRun({
+                client,
+                runId,
+                onProgress,
+                signal: extra?.signal,
+                callWindowMs: options?.callWindowMs,
+                pollIntervalMs: options?.pollIntervalMs,
+                progressTimeoutMs: options?.progressTimeoutMs,
+              });
+            }
+
+            const runInput: AgentRunInput = {
+              query: query as string,
+              ...(systemPrompt != null ? { systemPrompt } : {}),
+              ...(outputSchema != null ? { outputSchema } : {}),
+              ...(input != null ? { input } : {}),
+              // Under non-strict compilation zod infers `provider` as
+              // optional; normalize so both modes typecheck.
+              ...(dataSources != null
+                ? {
+                    dataSources: dataSources.flatMap(({ provider }) =>
+                      provider != null ? [{ provider }] : [],
+                    ),
+                  }
+                : {}),
+              ...(previousRunId != null ? { previousRunId } : {}),
+              effort: (effort ?? "low") as AgentEffort,
+              ...(budget != null ? { budget } : {}),
+            };
+
+            checkpoint("agent_run_request_prepared", {
+              hasSchema: outputSchema != null,
+              hasInputData: input?.data != null,
+              hasDataSources: dataSources != null,
+              hasPreviousRunId: previousRunId != null,
+              hasBudget: budget != null,
+              effort: runInput.effort,
+            });
+
+            return streamAgentRun({
+              client,
+              runInput,
+              onProgress,
+              onRunId: (createdRunId) => {
+                if (lease) {
+                  config?.keyPool?.pinRun(createdRunId, lease.fingerprint);
                 }
-              : {}),
-            ...(previousRunId != null ? { previousRunId } : {}),
-            effort: (effort ?? "low") as AgentEffort,
-            ...(budget != null ? { budget } : {}),
-          };
-
-          checkpoint("agent_run_request_prepared", {
-            hasSchema: outputSchema != null,
-            hasInputData: input?.data != null,
-            hasDataSources: dataSources != null,
-            hasPreviousRunId: previousRunId != null,
-            hasBudget: budget != null,
-            effort: runInput.effort,
-          });
-
-          outcome = await streamAgentRun({
-            client,
-            runInput,
-            onProgress,
-            signal: extra?.signal,
-            callWindowMs: options?.callWindowMs,
-            heartbeatMs: options?.heartbeatMs,
-            progressThrottleMs: options?.progressThrottleMs,
-            progressTimeoutMs: options?.progressTimeoutMs,
-          });
-        }
+              },
+              signal: extra?.signal,
+              callWindowMs: options?.callWindowMs,
+              heartbeatMs: options?.heartbeatMs,
+              progressThrottleMs: options?.progressThrottleMs,
+              progressTimeoutMs: options?.progressTimeoutMs,
+            });
+          },
+          pinTarget ? { pinId: pinTarget, allowUnpinnedFallback: true } : undefined,
+        );
 
         checkpoint("agent_run_finished", {
           eventCount: outcome.eventCount,

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
+import { API_CONFIG, integrationHeaders, withExaClient, type ExaClientConfig } from "./config.js";
 import { ExaAdvancedSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError, withTimeout } from "../utils/errorHandler.js";
@@ -142,7 +142,7 @@ function liteRefusal(parameters: readonly string[]) {
 
 export function registerWebSearchAdvancedTool(
   server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean; dynamicHighlights?: boolean },
+  config?: ExaClientConfig & { dynamicHighlights?: boolean },
 ): void {
   server.tool(
     "web_search_advanced_exa",
@@ -270,8 +270,6 @@ Returns: Search results with page text, highlights, summaries or subpage content
       logger.start(params.query);
 
       try {
-        const exa = createExaClient(config);
-
         // `lite` serves cached content only and rejects every freshness
         // option, so a `lite` search gets no livecrawl default.
         const freshness =
@@ -392,14 +390,20 @@ Returns: Search results with page text, highlights, summaries or subpage content
 
         const response = await withTimeout(
           () =>
-            retryWithBackoff(() =>
-              exa.request<ExaSearchResponse>(
-                API_CONFIG.ENDPOINTS.SEARCH,
-                "POST",
-                searchRequest,
-                undefined,
-                headers,
-              ),
+            withExaClient(
+              config,
+              undefined,
+              (exa) =>
+                retryWithBackoff(() =>
+                  exa.request<ExaSearchResponse>(
+                    API_CONFIG.ENDPOINTS.SEARCH,
+                    "POST",
+                    searchRequest,
+                    undefined,
+                    headers,
+                  ),
+                ),
+              { timeoutMs: API_CONFIG.TOOL_TIMEOUTS.ADVANCED_SEARCH_MS },
             ),
           API_CONFIG.TOOL_TIMEOUTS.ADVANCED_SEARCH_MS,
           "web_search_advanced_exa",

@@ -37,7 +37,7 @@
   "scripts": {
     "build": "npm run build:stdio",
     "build:runtime": "tsc",
-    "build:stdio": "esbuild src/stdio-cli.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/stdio.cjs --banner:js=\"#!/usr/bin/env node\" && chmod +x dist/stdio.cjs",
+    "build:stdio": "esbuild src/stdio-cli.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/stdio.cjs --banner:js=\"#!/usr/bin/env node\" && node -e \"try{require('fs').chmodSync('dist/stdio.cjs',0o755)}catch{}\"",
     "build:vercel": "npm install typescript && ./node_modules/.bin/tsc",
     "setup": "npm ci",
     "start": "npm run dev",

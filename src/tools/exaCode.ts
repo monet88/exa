@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
+import { API_CONFIG, integrationHeaders, withExaClient, type ExaClientConfig } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError } from "../utils/errorHandler.js";
@@ -9,10 +9,7 @@ import { lenientString, lenientOptionalNumber } from "./validation.js";
 import { logSearchWarnings, withSearchNotices } from "./searchNotes.js";
 import { checkpoint } from "agnost";
 
-export function registerExaCodeTool(
-  server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
-): void {
+export function registerExaCodeTool(server: McpServer, config?: ExaClientConfig): void {
   server.tool(
     "get_code_context_exa",
     `[Deprecated: Use web_search_exa instead] Find code examples, documentation, and programming solutions. 
@@ -41,8 +38,6 @@ If highlights are insufficient, follow up with web_fetch_exa on the best URLs.`,
       logger.start(`Searching for code context: ${query}`);
 
       try {
-        const exa = createExaClient(config);
-
         const searchRequest: ExaSearchRequest = {
           query,
           type: "lite",
@@ -58,13 +53,15 @@ If highlights are insufficient, follow up with web_fetch_exa on the best URLs.`,
         checkpoint("code_context_request_prepared");
         logger.log("Sending code search request to Exa API");
 
-        const response = await retryWithBackoff(() =>
-          exa.request<ExaSearchResponse>(
-            API_CONFIG.ENDPOINTS.SEARCH,
-            "POST",
-            searchRequest,
-            undefined,
-            integrationHeaders("exa-code-mcp", config),
+        const response = await withExaClient(config, undefined, (exa) =>
+          retryWithBackoff(() =>
+            exa.request<ExaSearchResponse>(
+              API_CONFIG.ENDPOINTS.SEARCH,
+              "POST",
+              searchRequest,
+              undefined,
+              integrationHeaders("exa-code-mcp", config),
+            ),
           ),
         );
 

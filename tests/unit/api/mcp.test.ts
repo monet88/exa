@@ -138,7 +138,11 @@ describe("api/mcp handler", () => {
     delete process.env.DYNAMIC_HIGHLIGHTS;
     delete process.env.ENABLED_TOOLS;
     delete process.env.EXA_API_KEY;
+    delete process.env.EXA_API_KEYS;
     delete process.env.EXA_API_KEY_BYPASS;
+    delete process.env.EXA_KEYS_FILE;
+    delete process.env.EXA_KEYS_STATE_FILE;
+    delete process.env.EXA_KEY_STRATEGY;
     delete process.env.KV_REST_API_TOKEN;
     delete process.env.KV_REST_API_URL;
     delete process.env.OAUTH_USER_AGENTS;
@@ -1020,5 +1024,51 @@ describe("api/mcp handler", () => {
       scopes_supported: ["mcp:tools"],
       bearer_methods_supported: ["header"],
     });
+  });
+
+  it("uses EXA_API_KEYS pool when no per-request credential is supplied", async () => {
+    process.env.EXA_API_KEYS = "pool-k1,pool-k2";
+    process.env.EXA_KEYS_STATE_FILE = "none";
+
+    const { config } = await callHandleRequest(new Request("https://mcp.exa.ai/mcp"));
+
+    expect(config).toMatchObject({
+      exaApiKey: undefined,
+      userProvidedApiKey: true,
+      authMethod: "api_key",
+    });
+    expect(config?.keyPool?.size).toBe(2);
+  });
+
+  it("prefers inbound x-api-key over EXA_API_KEYS server pool", async () => {
+    process.env.EXA_API_KEYS = "pool-k1,pool-k2";
+    process.env.EXA_KEYS_STATE_FILE = "none";
+
+    const { config } = await callHandleRequest(
+      new Request("https://mcp.exa.ai/mcp", {
+        headers: { "x-api-key": "caller-key" },
+      }),
+    );
+
+    expect(config).toMatchObject({
+      exaApiKey: "caller-key",
+      userProvidedApiKey: true,
+      authMethod: "api_key",
+    });
+    expect(config?.keyPool).toBeUndefined();
+  });
+
+  it("ignores EXA_KEYS_FILE=none and falls back to EXA_API_KEY", async () => {
+    process.env.EXA_KEYS_FILE = "none";
+    process.env.EXA_API_KEY = "single-env-key";
+
+    const { config } = await callHandleRequest(new Request("https://mcp.exa.ai/mcp"));
+
+    expect(config).toMatchObject({
+      exaApiKey: "single-env-key",
+      userProvidedApiKey: false,
+      authMethod: "free_tier",
+    });
+    expect(config?.keyPool).toBeUndefined();
   });
 });
