@@ -57,7 +57,7 @@ export async function main(
   const server = new McpServer({
     name: "exa-search-server",
     title: "Exa",
-    version: "3.4.3",
+    version: "3.5.0",
     websiteUrl: "https://exa.ai",
     icons: [
       { src: "https://exa.ai/images/favicon-32x32.png", mimeType: "image/png", sizes: ["32x32"] },

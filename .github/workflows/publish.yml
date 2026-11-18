@@ -2,10 +2,8 @@ name: Publish
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - package.json
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -16,7 +14,6 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4
@@ -27,31 +24,46 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Ensure npm supports trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g "npm@^11.5.1"
+
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          pkg_version="$(node -p "require('./package.json').version")"
+          expected_tag="v${pkg_version}"
+          if [[ "${GITHUB_REF_NAME}" != "${expected_tag}" ]]; then
+            echo "::error::Git tag ${GITHUB_REF_NAME} does not match package.json version ${pkg_version} (expected ${expected_tag})."
+            exit 1
+          fi
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Run CI checks
+        run: npm run ci
 
       - name: Check whether the package version is already published
         id: check-existing-version
         run: |
           set -euo pipefail
 
+          name="$(node -p "require('./package.json').name")"
           version="$(node -p "require('./package.json').version")"
           set +e
-          response="$(npm view "exa-mcp-server@${version}" version 2>"${RUNNER_TEMP}/npm-view.err")"
+          response="$(npm view "${name}@${version}" version 2>"${RUNNER_TEMP}/npm-view.err")"
           status=$?
           set -e
           errors="$(cat "${RUNNER_TEMP}/npm-view.err")"
 
           if [[ "${status}" -eq 0 && "${response}" == "${version}" ]]; then
-            echo "npm version ${version} is already published."
+            echo "npm version ${name}@${version} is already published."
             echo "skip=true" >> "${GITHUB_OUTPUT}"
           elif [[ "${status}" -ne 0 && "${errors}" == *"E404"* ]]; then
-            echo "npm version ${version} is not published yet."
+            echo "npm version ${name}@${version} is not published yet."
             echo "skip=false" >> "${GITHUB_OUTPUT}"
           else
-            echo "Unexpected response while checking npm version ${version}:" >&2
+            echo "Unexpected response while checking npm version ${name}@${version}:" >&2
             echo "${response}" >&2
             echo "${errors}" >&2
             exit 1
@@ -59,4 +71,6 @@ jobs:
 
       - name: Publish
         if: steps.check-existing-version.outputs.skip != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public

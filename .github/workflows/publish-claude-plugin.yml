@@ -6,12 +6,6 @@ name: Publish Claude plugin
 # publish a plugin-only change between releases.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - package.json
-      - .github/workflows/publish-claude-plugin.yml
   workflow_dispatch:
 
 permissions:
