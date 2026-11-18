@@ -7,6 +7,7 @@ import { initializeMcpServer, type McpConfig } from "../src/mcp-handler.js";
 import { DEFAULT_MCP_MAX_DURATION_SECONDS, parsePositiveInteger } from "../src/tools/agentRun.js";
 import { parseSearchType, type SearchType } from "../src/tools/searchType.js";
 import { parseDynamicHighlights } from "../src/tools/highlights.js";
+import { createKeyPoolFromEnv, hasKeyPoolEnv, type KeyPool } from "../src/utils/keyPool.js";
 import type { Ratelimit } from "@upstash/ratelimit";
 import type { Redis } from "@upstash/redis";
 import { isJwtToken, verifyOAuthToken } from "../src/utils/auth.js";
@@ -412,6 +413,7 @@ function getBearerToken(request: Request): string | undefined {
 
 interface RequestConfig {
   exaApiKey?: string;
+  keyPool?: KeyPool;
   enabledTools?: ToolId[];
   debug: boolean;
   userProvidedApiKey: boolean;
@@ -428,12 +430,38 @@ interface RequestConfig {
   mcpMaxDurationSeconds?: number;
 }
 
+let cachedEnvKeyPool: { signature: string; pool: KeyPool | undefined } | null = null;
+
+function getEnvKeyPool(): KeyPool | undefined {
+  if (!hasKeyPoolEnv(process.env)) {
+    cachedEnvKeyPool = null;
+    return undefined;
+  }
+
+  const signature = [
+    process.env.EXA_KEYS_FILE ?? "",
+    process.env.EXA_API_KEYS ?? "",
+    process.env.EXA_API_KEY ?? "",
+    process.env.EXA_KEY_STRATEGY ?? "",
+    process.env.EXA_KEYS_STATE_FILE ?? "",
+  ].join("\0");
+
+  if (cachedEnvKeyPool && cachedEnvKeyPool.signature === signature) {
+    return cachedEnvKeyPool.pool;
+  }
+
+  const pool = createKeyPoolFromEnv(process.env);
+  cachedEnvKeyPool = { signature, pool };
+  return pool;
+}
+
 /**
  * Extract configuration from request headers, URL, or environment variables.
  * Priority: x-api-key header > OAuth JWT > plain Bearer API key > query parameter > environment variable.
  */
 async function getConfigFromRequest(request: Request): Promise<RequestConfig> {
   let exaApiKey = process.env.EXA_API_KEY;
+  let keyPool: KeyPool | undefined;
   let enabledTools: ToolId[] | undefined;
   let debug = process.env.DEBUG === "true";
   let userProvidedApiKey = false;
@@ -541,8 +569,21 @@ async function getConfigFromRequest(request: Request): Promise<RequestConfig> {
   const exaSource = request.headers.get("x-exa-source") || undefined;
   const mcpSessionId = request.headers.get("MCP-Session-Id") || undefined;
 
+  if (!userProvidedApiKey) {
+    const envPool = getEnvKeyPool();
+    if (envPool) {
+      keyPool = envPool;
+      exaApiKey = undefined;
+      if (envPool.hasKeys) {
+        userProvidedApiKey = true;
+        authMethod = "api_key";
+      }
+    }
+  }
+
   return {
     exaApiKey,
+    ...(keyPool ? { keyPool } : {}),
     enabledTools,
     debug,
     userProvidedApiKey,
@@ -575,7 +616,7 @@ function createHandler(config: McpConfig) {
       serverInfo: {
         name: "exa-search-server",
         title: "Exa",
-        version: "3.4.3",
+        version: "3.5.0",
         websiteUrl: "https://exa.ai",
         icons: [
           {

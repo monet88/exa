@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { DELETE, GET, OPTIONS, POST } from "../api/mcp.js";
+import { hasKeyPoolEnv } from "./utils/keyPool.js";
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8000);
@@ -20,7 +21,7 @@ async function toRequest(request: IncomingMessage, body: Buffer): Promise<Reques
   const url = new URL(request.url || "/", `http://${HOST}:${PORT}`);
   const hasInboundApiKey =
     headers.has("x-api-key") || headers.has("authorization") || url.searchParams.has("exaApiKey");
-  if (!hasInboundApiKey && process.env.EXA_API_KEY) {
+  if (!hasInboundApiKey && !hasKeyPoolEnv(process.env) && process.env.EXA_API_KEY) {
     headers.set("x-api-key", process.env.EXA_API_KEY);
   }
 

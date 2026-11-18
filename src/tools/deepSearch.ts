@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
+import { API_CONFIG, integrationHeaders, withExaClient, type ExaClientConfig } from "./config.js";
 import { ExaDeepSearchRequest, ExaDeepSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError } from "../utils/errorHandler.js";
@@ -22,10 +22,7 @@ import {
 } from "./searchNotes.js";
 import { checkpoint } from "agnost";
 
-export function registerDeepSearchTool(
-  server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
-): void {
+export function registerDeepSearchTool(server: McpServer, config?: ExaClientConfig): void {
   server.tool(
     "deep_search_exa",
     `[Deprecated: Use web_search_advanced_exa instead] Deep search with automatic query expansion for thorough research. Generates multiple search variations to find results from multiple angles, then synthesizes a short answer with citations.
@@ -90,8 +87,6 @@ Note: Requires an Exa API key. 'deep' takes 4-12s.`,
       logger.start(objective);
 
       try {
-        const exa = createExaClient(config);
-
         const searchRequest: ExaDeepSearchRequest = {
           query: objective,
           type: type || "deep",
@@ -126,13 +121,15 @@ Note: Requires an Exa API key. 'deep' takes 4-12s.`,
         checkpoint("deep_search_request_prepared");
         logger.log("Sending deep search request to Exa API");
 
-        const response = await retryWithBackoff(() =>
-          exa.request<ExaDeepSearchResponse>(
-            API_CONFIG.ENDPOINTS.SEARCH,
-            "POST",
-            searchRequest,
-            undefined,
-            integrationHeaders("deep-search-mcp", config),
+        const response = await withExaClient(config, undefined, (exa) =>
+          retryWithBackoff(() =>
+            exa.request<ExaDeepSearchResponse>(
+              API_CONFIG.ENDPOINTS.SEARCH,
+              "POST",
+              searchRequest,
+              undefined,
+              integrationHeaders("deep-search-mcp", config),
+            ),
           ),
         );
 

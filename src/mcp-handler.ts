@@ -24,9 +24,11 @@ import {
 } from "./toolRegistry.js";
 import { log } from "./utils/logger.js";
 import { loadAgentSkillContent } from "./utils/agentSkill.js";
+import type { KeyPool } from "./utils/keyPool.js";
 
 export interface McpConfig {
   exaApiKey?: string;
+  keyPool?: KeyPool;
   enabledTools?: string[];
   debug?: boolean;
   userProvidedApiKey?: boolean;

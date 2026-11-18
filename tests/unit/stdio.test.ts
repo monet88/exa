@@ -175,4 +175,33 @@ describe("Stdio entrypoint", () => {
     expect(stdioTransportConstructorMock).toHaveBeenCalledTimes(1);
     expect(connectMock).toHaveBeenCalledTimes(1);
   });
+
+  it("buildConfigFromEnv builds a KeyPool from EXA_API_KEYS and marks userProvidedApiKey true", async () => {
+    const { buildConfigFromEnv } = await import("../../src/stdio.js");
+
+    const config = buildConfigFromEnv({
+      EXA_API_KEYS: "key-1, key-2, key-3",
+      EXA_KEY_STRATEGY: "round-robin",
+      EXA_KEYS_STATE_FILE: "none",
+    });
+
+    expect(config.userProvidedApiKey).toBe(true);
+    expect(config.keyPool?.size).toBe(3);
+    expect(config.keyPool?.strategy).toBe("round-robin");
+    expect(config.keyPool?.acquire()?.key).toBe("key-1");
+    expect(config.keyPool?.acquire()?.key).toBe("key-2");
+  });
+
+  it("buildConfigFromEnv splits comma-separated EXA_API_KEY into a KeyPool", async () => {
+    const { buildConfigFromEnv } = await import("../../src/stdio.js");
+
+    const config = buildConfigFromEnv({
+      EXA_API_KEY: "k-a, k-b",
+      EXA_KEYS_STATE_FILE: "none",
+    });
+
+    expect(config.userProvidedApiKey).toBe(true);
+    expect(config.keyPool?.size).toBe(2);
+    expect(config.keyPool?.strategy).toBe("fill-first");
+  });
 });

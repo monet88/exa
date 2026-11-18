@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ExaError } from "exa-js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
+import { API_CONFIG, integrationHeaders, withExaClient, type ExaClientConfig } from "./config.js";
 import { DeepResearchCheckResponse, DeepResearchErrorResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError } from "../utils/errorHandler.js";
@@ -12,10 +12,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function registerDeepResearchCheckTool(
-  server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
-): void {
+export function registerDeepResearchCheckTool(server: McpServer, config?: ExaClientConfig): void {
   server.tool(
     "deep_researcher_check",
     `[Deprecated] Check status and get results from a deep research task.
@@ -42,19 +39,23 @@ Important: Keep calling with the same research ID until status is 'completed'.`,
         await delay(5000);
         checkpoint("deep_research_check_delay_complete");
 
-        const exa = createExaClient(config);
-
         logger.log(`Checking status for research: ${researchId}`);
 
         checkpoint("deep_research_check_request_prepared");
-        const response = await retryWithBackoff(() =>
-          exa.request<DeepResearchCheckResponse>(
-            `${API_CONFIG.ENDPOINTS.RESEARCH}/${researchId}`,
-            "GET",
-            undefined,
-            undefined,
-            integrationHeaders("deep-research-mcp", config),
-          ),
+        const response = await withExaClient(
+          config,
+          undefined,
+          (exa) =>
+            retryWithBackoff(() =>
+              exa.request<DeepResearchCheckResponse>(
+                `${API_CONFIG.ENDPOINTS.RESEARCH}/${researchId}`,
+                "GET",
+                undefined,
+                undefined,
+                integrationHeaders("deep-research-mcp", config),
+              ),
+            ),
+          { pinId: researchId, allowUnpinnedFallback: true },
         );
 
         checkpoint("deep_research_check_response_received");

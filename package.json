@@ -1,16 +1,19 @@
 {
-  "name": "exa-mcp-server",
-  "version": "3.4.3",
+  "name": "@monet4292/exa",
+  "version": "3.5.0",
   "description": "Connect AI agents to Exa for web search, content fetching, and multi-step research.",
   "mcpName": "ai.exa/exa",
   "type": "module",
   "module": "./src/stdio.ts",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/exa-labs/exa-mcp-server.git"
+    "url": "git+https://github.com/monet88/exa.git"
   },
   "bin": {
-    "exa-mcp-server": "dist/stdio.cjs"
+    "exa": "dist/stdio.cjs"
   },
   "files": [
     "dist/stdio.cjs",
@@ -37,7 +40,7 @@
   "scripts": {
     "build": "npm run build:stdio",
     "build:runtime": "tsc",
-    "build:stdio": "esbuild src/stdio-cli.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/stdio.cjs --banner:js=\"#!/usr/bin/env node\" && chmod +x dist/stdio.cjs",
+    "build:stdio": "esbuild src/stdio-cli.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/stdio.cjs --banner:js=\"#!/usr/bin/env node\" && node -e \"try{require('fs').chmodSync('dist/stdio.cjs',0o755)}catch{}\"",
     "build:vercel": "npm install typescript && ./node_modules/.bin/tsc",
     "setup": "npm ci",
     "start": "npm run dev",
@@ -50,6 +53,7 @@
     "test:coverage": "vitest run --coverage",
     "ci": "npm run format:check && npm run typecheck && npm run test",
     "prepare": "npm run build:stdio",
+    "version": "node scripts/sync-version.mjs && git add plugins/exa/.claude-plugin/plugin.json plugin.json server.json gemini-extension.json .claude-plugin/plugin.json .claude-plugin/marketplace.json src/stdio.ts api/mcp.ts",
     "watch": "./node_modules/.bin/tsc --watch",
     "dev": "tsx src/stdio-cli.ts",
     "dev:vercel": "vercel dev",

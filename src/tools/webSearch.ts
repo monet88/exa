@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
+import { API_CONFIG, integrationHeaders, withExaClient, type ExaClientConfig } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError, withTimeout } from "../utils/errorHandler.js";
@@ -10,13 +10,9 @@ import type { SearchType } from "./searchType.js";
 import { addExaBeta, DYNAMIC_HIGHLIGHTS_BETA_TOKEN } from "./highlights.js";
 import { checkpoint } from "agnost";
 
-type WebSearchConfig = {
-  exaApiKey?: string;
-  userProvidedApiKey?: boolean;
+type WebSearchConfig = ExaClientConfig & {
   defaultSearchType?: SearchType;
   dynamicHighlights?: boolean;
-  exaSource?: string;
-  mcpSessionId?: string;
 };
 
 const WEB_SEARCH_DESCRIPTION = `Search the web for any topic and get clean, ready-to-use content.
@@ -71,8 +67,6 @@ export function registerWebSearchTool(
     logger.start(cleanedQuery);
 
     try {
-      const exa = createExaClient(config);
-
       const searchRequest: ExaSearchRequest = {
         query: cleanedQuery,
         type: config?.defaultSearchType || "auto",
@@ -93,14 +87,20 @@ export function registerWebSearchTool(
 
       const response = await withTimeout(
         () =>
-          retryWithBackoff(() =>
-            exa.request<ExaSearchResponse>(
-              API_CONFIG.ENDPOINTS.SEARCH,
-              "POST",
-              searchRequest,
-              undefined,
-              headers,
-            ),
+          withExaClient(
+            config,
+            undefined,
+            (exa) =>
+              retryWithBackoff(() =>
+                exa.request<ExaSearchResponse>(
+                  API_CONFIG.ENDPOINTS.SEARCH,
+                  "POST",
+                  searchRequest,
+                  undefined,
+                  headers,
+                ),
+              ),
+            { timeoutMs: API_CONFIG.TOOL_TIMEOUTS.SEARCH_MS },
           ),
         API_CONFIG.TOOL_TIMEOUTS.SEARCH_MS,
         toolId,

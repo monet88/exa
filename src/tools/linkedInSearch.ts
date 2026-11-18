@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
+import { API_CONFIG, integrationHeaders, withExaClient, type ExaClientConfig } from "./config.js";
 import { ExaSearchRequest, ExaSearchResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError } from "../utils/errorHandler.js";
@@ -9,10 +9,7 @@ import { logSearchWarnings, withSearchNotices } from "./searchNotes.js";
 import { lenientString, lenientOptionalNumber } from "./validation.js";
 import { checkpoint } from "agnost";
 
-export function registerLinkedInSearchTool(
-  server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
-): void {
+export function registerLinkedInSearchTool(server: McpServer, config?: ExaClientConfig): void {
   server.tool(
     "linkedin_search_exa",
     "[Deprecated: Use web_search_advanced_exa with category 'people' instead] Search LinkedIn profiles.",
@@ -33,8 +30,6 @@ export function registerLinkedInSearchTool(
       logger.start(`${query}`);
 
       try {
-        const exa = createExaClient(config);
-
         let searchQuery = query;
         searchQuery = `${query} LinkedIn profile`;
 
@@ -51,13 +46,15 @@ export function registerLinkedInSearchTool(
         checkpoint("linkedin_search_request_prepared");
         logger.log("Sending request to Exa API for LinkedIn search");
 
-        const response = await retryWithBackoff(() =>
-          exa.request<ExaSearchResponse>(
-            API_CONFIG.ENDPOINTS.SEARCH,
-            "POST",
-            searchRequest,
-            undefined,
-            integrationHeaders("linkedin-search-mcp", config),
+        const response = await withExaClient(config, undefined, (exa) =>
+          retryWithBackoff(() =>
+            exa.request<ExaSearchResponse>(
+              API_CONFIG.ENDPOINTS.SEARCH,
+              "POST",
+              searchRequest,
+              undefined,
+              integrationHeaders("linkedin-search-mcp", config),
+            ),
           ),
         );
 

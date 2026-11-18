@@ -1,16 +1,13 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
+import { API_CONFIG, integrationHeaders, withExaClient, type ExaClientConfig } from "./config.js";
 import { DeepResearchRequest, DeepResearchStartResponse } from "../types.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError } from "../utils/errorHandler.js";
 import { lenientString } from "./validation.js";
 import { checkpoint } from "agnost";
 
-export function registerDeepResearchStartTool(
-  server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
-): void {
+export function registerDeepResearchStartTool(server: McpServer, config?: ExaClientConfig): void {
   server.tool(
     "deep_researcher_start",
     `[Deprecated] Start an AI research agent that searches, reads, and writes a detailed report. Takes 15 seconds to 2 minutes.
@@ -46,8 +43,6 @@ Important: Call deep_researcher_check with the returned research ID to get the r
       logger.start(instructions);
 
       try {
-        const exa = createExaClient(config);
-
         const researchRequest: DeepResearchRequest = {
           model: model || "exa-research-fast",
           instructions,
@@ -59,15 +54,26 @@ Important: Call deep_researcher_check with the returned research ID to get the r
         });
         logger.log(`Starting research with model: ${researchRequest.model}`);
 
-        const response = await retryWithBackoff(() =>
-          exa.request<DeepResearchStartResponse>(
-            API_CONFIG.ENDPOINTS.RESEARCH,
-            "POST",
-            researchRequest,
-            undefined,
-            integrationHeaders("deep-research-mcp", config),
-          ),
+        const { response, fingerprint } = await withExaClient(
+          config,
+          undefined,
+          async (exa, lease) => {
+            const res = await retryWithBackoff(() =>
+              exa.request<DeepResearchStartResponse>(
+                API_CONFIG.ENDPOINTS.RESEARCH,
+                "POST",
+                researchRequest,
+                undefined,
+                integrationHeaders("deep-research-mcp", config),
+              ),
+            );
+            return { response: res, fingerprint: lease?.fingerprint };
+          },
         );
+
+        if (response?.researchId && fingerprint) {
+          config?.keyPool?.pinRun(response.researchId, fingerprint);
+        }
 
         checkpoint("deep_research_start_response_received");
         logger.log(`Research task started with ID: ${response.researchId}`);

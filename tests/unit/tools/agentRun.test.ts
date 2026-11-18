@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import type { AgentEvent, AgentRun } from "exa-js";
+import { ExaError, type AgentEvent, type AgentRun } from "exa-js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   agentRunInputShape,
@@ -15,6 +15,7 @@ import {
   type AgentRunClient,
 } from "../../../src/tools/agentRun.js";
 import type { AgentRunInput } from "../../../src/types.js";
+import { KeyPool } from "../../../src/utils/keyPool.js";
 import { FakeMcpServer } from "../../helpers/fakeMcpServer.js";
 
 function event(name: string, data: Record<string, unknown> = {}): AgentEvent {
@@ -924,5 +925,64 @@ describe("agent_run tool", () => {
     expect(agentOnly).not.toContain("web_search_exa");
     expect(agentOnly).not.toContain("web_fetch_exa");
     expect(agentOnly).toContain("Not for a single question");
+  });
+
+  it("rotates keys on pre-stream 402 and pins the created runId to the owning key on resume", async () => {
+    const fake = new FakeMcpServer();
+    const keyPool = new KeyPool({
+      inlineKeys: ["key-1", "key-2", "key-3"],
+      strategy: "round-robin",
+      onWarn: () => {},
+    });
+
+    const usedKeys: string[] = [];
+    const clientFactory = vi.fn((cfg?: { exaApiKey?: string }) => {
+      const apiKey = cfg?.exaApiKey ?? "";
+      usedKeys.push(apiKey);
+      return {
+        createStream: async () => {
+          if (apiKey === "key-1") {
+            throw new ExaError("No more credits", 402);
+          }
+          return streamOf([
+            event("agent_run.created", { id: "agent_run_pinned", status: "queued" }),
+            event("agent_run.started", { status: "running" }),
+          ]);
+        },
+        getRun: async () => completedRun({ id: "agent_run_pinned" }),
+        cancelRun: async () => completedRun({ id: "agent_run_pinned", status: "cancelled" }),
+      };
+    });
+
+    registerAgentRunTool(
+      fake as unknown as McpServer,
+      { keyPool },
+      {
+        clientFactory,
+        callWindowMs: 5,
+        heartbeatMs: 50,
+        pollIntervalMs: 5,
+      },
+    );
+
+    const tool = fake.getTool("agent_run");
+    const extra = {
+      sendNotification: vi.fn(),
+      signal: new AbortController().signal,
+    };
+
+    // Call 1: key-1 fails with 402 before stream starts, key-2 creates agent_run_pinned and pins it.
+    const started = (await tool.handler({ query: "research topic" }, extra)) as {
+      structuredContent?: Record<string, unknown>;
+    };
+    expect(started.structuredContent?.id).toBe("agent_run_pinned");
+    expect(usedKeys).toEqual(["key-1", "key-2"]);
+
+    // Advance round-robin cursor onto key-3; resuming agent_run_pinned must still route to key-2.
+    const resumed = (await tool.handler({ runId: "agent_run_pinned" }, extra)) as {
+      structuredContent?: Record<string, unknown>;
+    };
+    expect(resumed.structuredContent?.status).toBe("completed");
+    expect(usedKeys).toEqual(["key-1", "key-2", "key-2"]);
   });
 });

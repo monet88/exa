@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { API_CONFIG, createExaClient, integrationHeaders } from "./config.js";
+import { API_CONFIG, integrationHeaders, withExaClient, type ExaClientConfig } from "./config.js";
 import { createRequestLogger } from "../utils/logger.js";
 import { retryWithBackoff, formatToolError, withTimeout } from "../utils/errorHandler.js";
 import { sanitizeContentsResponse } from "../utils/exaResponseSanitizer.js";
@@ -33,7 +33,7 @@ function formatCrawlResults(results: any[], errors: CrawlStatus[]): string {
 
 export function registerWebFetchTool(
   server: McpServer,
-  config?: { exaApiKey?: string; userProvidedApiKey?: boolean },
+  config?: ExaClientConfig,
   toolName?: string,
 ): void {
   server.registerTool(
@@ -74,8 +74,6 @@ Returns: Clean text content and metadata from the page(s).`,
       logger.start(urls.join(", "));
 
       try {
-        const exa = createExaClient(config);
-
         const crawlRequest = {
           urls,
           text: {
@@ -88,14 +86,20 @@ Returns: Clean text content and metadata from the page(s).`,
 
         const response = await withTimeout(
           () =>
-            retryWithBackoff(() =>
-              exa.request<any>(
-                "/contents",
-                "POST",
-                crawlRequest,
-                undefined,
-                integrationHeaders("crawling-mcp", config),
-              ),
+            withExaClient(
+              config,
+              undefined,
+              (exa) =>
+                retryWithBackoff(() =>
+                  exa.request<any>(
+                    "/contents",
+                    "POST",
+                    crawlRequest,
+                    undefined,
+                    integrationHeaders("crawling-mcp", config),
+                  ),
+                ),
+              { timeoutMs: API_CONFIG.TOOL_TIMEOUTS.FETCH_MS },
             ),
           API_CONFIG.TOOL_TIMEOUTS.FETCH_MS,
           "web_fetch_exa",
